@@ -4,6 +4,9 @@ ScoreParse <- function(filename) {
 	#Start by loading the file
 	BigTable = read.csv(filename, stringsAsFactors=F)
 	
+	#Adjust the table to have a minimum day of 0
+	BigTable$Day = (BigTable$Day - min(BigTable$Day)) + 1
+	
 	#Get a list of all the corps in the file
 	CorpsNames = unique(BigTable$Corps)
 	
@@ -25,7 +28,7 @@ ScoreParse <- function(filename) {
 	}
 	
 	#Now run the function on all the world class and open class corps
-	AllFrame = lapply(CorpsNames, FrameCreate, Table=BigTable)
+	AllFrames = lapply(CorpsNames, FrameCreate, Table=BigTable)
 	
 	#Add the corps names to the frames
 	names(AllFrames) = CorpsNames
@@ -39,11 +42,13 @@ ExpFitter <- function(CorpsFrame, BaseDay) {
 	if (nrow(CorpsFrame) < 6) { return(NULL) }
 	
 	#The weight vector reduces weights of recent scores, based on their correlation with finals week scores
-	WeightVec = 0.65 + 3.6e-6 * (1:49)^2.86
+	## TODO: Find a reliable way to make this dynamic
+	WeightVec = 0.65 + 3.6e-6 * (1:70)^2.86
 	WeightVec = c(WeightVec, 1,1,1)
 	
 	#Create a vector for the corps-specific day weights
 	BaseWeight = WeightVec[BaseDay]
+	#print(c(BaseDay, BaseWeight))
 	#Create the linear increase in weights from BaseWeight to 1 over the 1.5-week window
 	Wline = seq(from=1, to=BaseWeight, length.out=10)
 	#All weights are 1 before the 1.5-week window
@@ -57,12 +62,12 @@ ExpFitter <- function(CorpsFrame, BaseDay) {
 	#Now fit the curve for each caption, wrapped in a try to avoid catastrophic errors
 	#This tryCatch won't make the objects if we're not successful
 	tryCatch({ 
-		ScoreModel = nls(Score ~ a + Day^b, data=data.frame(Score, Day), start=list(a=Score[1], b=0.5), 
+		ScoreModel = nls(Score ~ a + Day^b, data=data.frame(Score, Day), start=list(a=Score[1], b=0.8), 
 			control=nls.control(warnOnly=TRUE), weights=SpecWeights[Day])
 	}, warning = function(w) { #This makes it so scenarios of non-convergence don't return bad coefficients
-		print("Can't run corps due to non-convergence")
+		#print("Can't run corps due to non-convergence")
 	}, error = function(e) {
-		print("Can't run corps due to an error in curve fitting")
+		#print("Can't run corps due to an error in curve fitting")
 	}) 
 	
 	#Check to make sure the model exists (trycatch won't write to the variable if it doesn't)
@@ -73,7 +78,7 @@ ExpFitter <- function(CorpsFrame, BaseDay) {
 	TrimmedResult = NA #This tracks if we're successful in the if loop
 	
 	if (!ExistBool) { #This means we didn't get a good fit
-		print("Nonconvergence!")
+		#print("Nonconvergence!")
 		#Try removing the most recent scores until we get convergence or too small a sample
 		CorpsFrame2 = CorpsFrame2[1:(nrow(CorpsFrame2)-1) ,]
 		
@@ -107,7 +112,7 @@ ExpFitter <- function(CorpsFrame, BaseDay) {
 }
 
 #Now make a function that predicts a day for all corps
-Predictor <- function(CorpsList, PredictDay, Nmonte, RankDay, Damp=TRUE) {
+Predictor <- function(CorpsList, PredictDay, Nmonte, RankDay, ExpWeight) {
 	#Start by making a function that predicts N scores based on the exponential uncertainty
 	ExpPredict <- function(CorpsCoefList, PredictDay, Nmonte) {
 		#Start by gathering basic information
@@ -122,11 +127,11 @@ Predictor <- function(CorpsList, PredictDay, Nmonte, RankDay, Damp=TRUE) {
 			#Recall the exponential is of the form Score = a + Day^b
 			
 			#Make a vector of random a's and b's for each caption
-			randa = rnorm(Nmonte, mean=CorpsCoefs["a"], sd=CorpsCoefs["aSE"])
-			randb = rnorm(Nmonte, mean=CorpsCoefs["b"], sd=CorpsCoefs["bSE"]) 
+			randa = rnorm(Nmonte, mean=as.numeric(CorpsCoefs["a"]), sd=as.numeric(CorpsCoefs["aSE"]))
+			randb = rnorm(Nmonte, mean=as.numeric(CorpsCoefs["b"]), sd=as.numeric(CorpsCoefs["bSE"])) 
 			
 			#Now create the score for each caption
-			PredScore = randA + PredictDay ^ randb
+			PredScore = randa + PredictDay ^ randb
 			
 			#Now correct each score to make sure they're actually possible
 			PredScore[PredScore > 100] = 100
@@ -165,18 +170,18 @@ Predictor <- function(CorpsList, PredictDay, Nmonte, RankDay, Damp=TRUE) {
 				if (IndexDiff == 0) { 
 					#This is a diag
 					CorrMat[Row,Col] = 1
-				} else if (IndexDiff > 8) { 
+				} else if (IndexDiff > 14) { 
 					#This is a background correlation
-					CorrMat[Row,Col] = 0.1
+					CorrMat[Row,Col] = 0.263
 				} else { 
-					#This is an off-diag
-					CorrMat[Row,Col] = 0.77 - IndexDiff*0.07
+					#This is an off-diag. The adjancent correlation should by 0.514
+					CorrMat[Row,Col] = 0.513+(0.25/14) - IndexDiff*(0.25/14)
 				}
 			}
 		}
 		
-		#The sqrt(4) is the historical noise magnitude in caption scores
-		ScoreCov = CorrMat * sqrt(4)
+		#2 is the historical noise magnitude (variance) in overall scores uncertainty
+		ScoreCov = CorrMat * 2
 		
 		#Draw the random numbers using the covariance matrices, 
 		ScoreRand = mvrnorm(Nmonte, mu=rep(0,Ncorps), Sigma=ScoreCov, empirical=F)
@@ -186,7 +191,7 @@ Predictor <- function(CorpsList, PredictDay, Nmonte, RankDay, Damp=TRUE) {
 		
 		#Fill in the vectors
 		for (C in 1:Ncorps) {
-			ScoreNonrand[C] = CorpsCoefList[[C]]["a"] + RankDay ^ CorpsCoefList[[C]]["b"]
+			ScoreNonrand[C] = as.numeric(CorpsCoefList[[C]]["a"]) + RankDay ^ as.numeric(CorpsCoefList[[C]]["b"])
 		}
 		#Convert these to gaps
 		ScoreNonrand = ScoreNonrand - max(ScoreNonrand) 
@@ -196,18 +201,8 @@ Predictor <- function(CorpsList, PredictDay, Nmonte, RankDay, Damp=TRUE) {
 		
 		#Now loop through each corps and fill in ScoreList
 		for (C in 1:Ncorps) {
-			#Damp the noise for top 15 if the PredictDay is >38 and Damp is true
-			if (Damp & PredictDay > 38) {
-				#Adjust the uncertainty for slotting in the top 12 later in the season by reducing the magnitude of the noise
-				if (Ranks[C] < 15) {
-					ScoreRand[,Ranks[C]] = ScoreRand[,Ranks[C]] * (1 - 0.03*(15-Ranks[C])) * (RankDay-38)/14
-				}
-			}
-			
-			#Get the scores for each caption
+			#Get the scores and put them into the list
 			ScoreVec = ScoreNonrand[C] + ScoreRand[,Ranks[C]]
-			
-			#Put the summed scores into the list
 			ScoreList[[C]] = ScoreVec
 		}
 		
@@ -227,9 +222,8 @@ Predictor <- function(CorpsList, PredictDay, Nmonte, RankDay, Damp=TRUE) {
 	
 	#Fill in the final ScoreList
 	for (C in 1:Ncorps) {
-		ScoreList[[C]] = 0.275*ExpScoreList[[C]] + 0.725*RandScoreList[[C]]
+		ScoreList[[C]] = ExpWeight*ExpScoreList[[C]] + (1-ExpWeight)*RandScoreList[[C]]
 	}
-	print(ScoreList)
 	
 	#Fill in RankList by sorting the scores
 	for (n in 1:Nmonte) {
