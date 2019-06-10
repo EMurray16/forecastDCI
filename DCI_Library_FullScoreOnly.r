@@ -36,24 +36,32 @@ ScoreParse <- function(filename) {
 }
 
 #Create a function that fits the exponential curve to a data frame
-ExpFitter <- function(CorpsFrame, BaseDay) {
+ExpFitter <- function(CorpsFrame, BaseDay, PrelimsDay) {
+	if (missing(PrelimsDay)) {
+		print("MISSING PRELIMSDAY")
+		return(NULL)
+	}
+	
+	#Order the dataframe by day 
+	CorpsFrame = CorpsFrame[order(CorpsFrame$Day, decreasing=F),]
+	CorpsFrame = CorpsFrame[CorpsFrame$Day <= BaseDay,]
+	
 	#Start by checking the number of shows
 	if (is.null(CorpsFrame)) { return(NULL) }
-	if (nrow(CorpsFrame) < 6) { return(NULL) }
+	if (nrow(CorpsFrame) < 7) { return(NULL) }
 	
 	#The weight vector reduces weights of recent scores, based on their correlation with finals week scores
-	## TODO: Find a reliable way to make this dynamic
-	WeightVec = 0.65 + 3.6e-6 * (1:70)^2.86
-	WeightVec = c(WeightVec, 1,1,1)
+	DayVec = seq(from=0, to=PrelimsDay+2, by=1)
+	WeightVec = 1 - (PrelimsDay-DayVec)*0.00224
+	DiscountOrig = 0.25 + (0.75-0.25)/PrelimsDay * BaseDay
+	DiscountVec = seq(from=1, to=DiscountOrig, length.out=6)
 	
 	#Create a vector for the corps-specific day weights
-	BaseWeight = WeightVec[BaseDay]
-	#print(c(BaseDay, BaseWeight))
-	#Create the linear increase in weights from BaseWeight to 1 over the 1.5-week window
-	Wline = seq(from=1, to=BaseWeight, length.out=10)
-	#All weights are 1 before the 1.5-week window
-	SpecWeights = c(rep(1,BaseDay-10), Wline)
-	
+	ShowWeights = WeightVec[CorpsFrame$Day]
+	#Now discount the most recent 5
+	Nshow = length(ShowWeights)
+	ShowWeights[(Nshow-5):Nshow] = ShowWeights[(Nshow-5):Nshow] * DiscountVec
+		
 	#Pull out the individual vectors to match nls input better
 	N = sum(CorpsFrame$Day <= BaseDay)
 	Score = CorpsFrame$Score[CorpsFrame$Day <= BaseDay]
@@ -63,7 +71,7 @@ ExpFitter <- function(CorpsFrame, BaseDay) {
 	#This tryCatch won't make the objects if we're not successful
 	tryCatch({ 
 		ScoreModel = nls(Score ~ a + Day^b, data=data.frame(Score, Day), start=list(a=Score[1], b=0.8), 
-			control=nls.control(warnOnly=TRUE), weights=SpecWeights[Day])
+			control=nls.control(warnOnly=TRUE), weights=ShowWeights)
 	}, warning = function(w) { #This makes it so scenarios of non-convergence don't return bad coefficients
 		#print("Can't run corps due to non-convergence")
 	}, error = function(e) {
@@ -153,7 +161,7 @@ Predictor <- function(CorpsList, PredictDay, Nmonte, RankDay, ExpWeight) {
 	}
 	
 	#Now create a function that predicts N scores based on the random error
-	RandPredict <- function(CorpsCoefList, PredictDay, Nmonte, RankDay, Damp) {
+	RandPredict <- function(CorpsCoefList, PredictDay, Nmonte, RankDay) {
 		library(MASS)
 		
 		#Get the basic information
@@ -163,6 +171,7 @@ Predictor <- function(CorpsList, PredictDay, Nmonte, RankDay, ExpWeight) {
 		
 		#Make a correlation matrix for the errors
 		CorrMat = matrix(nrow=Ncorps, ncol=Ncorps)
+		diag(CorrMat) = 1
 		for (Row in 1:Ncorps) {
 			for (Col in 1:Ncorps) {
 				IndexDiff = abs(Row - Col)
@@ -179,9 +188,10 @@ Predictor <- function(CorpsList, PredictDay, Nmonte, RankDay, ExpWeight) {
 				}
 			}
 		}
+		#print(CorrMat)
 		
-		#2 is the historical noise magnitude (variance) in overall scores uncertainty
-		ScoreCov = CorrMat * 2
+		#2 is the historical noise	magnitude (variance) in overall scores uncertainty
+		ScoreCov = CorrMat * 4 #adjusted to add up to 2.1 with ExpPredict on average
 		
 		#Draw the random numbers using the covariance matrices, 
 		ScoreRand = mvrnorm(Nmonte, mu=rep(0,Ncorps), Sigma=ScoreCov, empirical=F)
@@ -214,7 +224,7 @@ Predictor <- function(CorpsList, PredictDay, Nmonte, RankDay, ExpWeight) {
 	
 	#Run both score predictors
 	ExpScoreList = ExpPredict(CorpsList, PredictDay, Nmonte)
-	RandScoreList = RandPredict(CorpsList, PredictDay, Nmonte, RankDay, Damp)
+	RandScoreList = RandPredict(CorpsList, PredictDay, Nmonte, RankDay)
 	
 	#Now create the overall score and rank lists to return
 	ScoreList = vector(mode='list', length=Ncorps)
@@ -224,6 +234,9 @@ Predictor <- function(CorpsList, PredictDay, Nmonte, RankDay, ExpWeight) {
 	for (C in 1:Ncorps) {
 		ScoreList[[C]] = ExpWeight*ExpScoreList[[C]] + (1-ExpWeight)*RandScoreList[[C]]
 	}
+	vars = sapply(ScoreList, var)
+	print(mean(vars))
+	#print(sapply(ScoreList, sd))
 	
 	#Fill in RankList by sorting the scores
 	for (n in 1:Nmonte) {
