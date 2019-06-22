@@ -1,5 +1,4 @@
 #This reads the data and runs the 2018 DCI Model
-setwd("C:/evan/")
 
 #Load the libraries
 Libraries = c("tictoc")
@@ -7,9 +6,9 @@ lapply(Libraries, library, character.only=T)
 source("go/src/github.com/EMurray16/forecastDCI/DCI_Library_FullScoreOnly.r")
 
 #Start by reading the data
-ScoreList = ScoreParse("Documents/R/ScoreHistory/2008.csv")
+ScoreList = ScoreParse("ScoreHistory/2008.csv")
 #Also read the csv into an external object to get the most recent day 
-ScoreTable = read.csv("Documents/R/ScoreHistory/2008.csv")
+ScoreTable = read.csv("ScoreHistory/2008.csv")
 MaxDay = max(ScoreTable$Day)
 
 #Now find the exponentials for all corps
