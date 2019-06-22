@@ -234,9 +234,7 @@ Predictor <- function(CorpsList, PredictDay, Nmonte, RankDay, ExpWeight) {
 	for (C in 1:Ncorps) {
 		ScoreList[[C]] = ExpWeight*ExpScoreList[[C]] + (1-ExpWeight)*RandScoreList[[C]]
 	}
-	vars = sapply(ScoreList, var)
-	print(mean(vars))
-	#print(sapply(ScoreList, sd))
+	# vars = sapply(ScoreList, var); print(mean(vars)); print(vars) #debugging
 	
 	#Fill in RankList by sorting the scores
 	for (n in 1:Nmonte) {
