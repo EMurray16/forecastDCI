@@ -134,7 +134,7 @@ ExpFitter <- function(CorpsFrame, BaseDay, PrelimsDay=50) {
 }
 
 #Now make a function that predicts a day for all corps
-Predictor <- function(CorpsList, PredictDay, Nmonte, RankDay, Damp=TRUE) {
+Predictor <- function(CorpsList, PredictDay, Nmonte, RankDay) {
 	#Start by making a function that predicts N scores based on the exponential uncertainty
 	ExpPredict <- function(CorpsCoefList, PredictDay, Nmonte) {
 		#Start by gathering basic information
@@ -184,7 +184,7 @@ Predictor <- function(CorpsList, PredictDay, Nmonte, RankDay, Damp=TRUE) {
 	}
 	
 	#Now create a function that predicts N scores based on the random error
-	RandPredict <- function(CorpsCoefList, PredictDay, Nmonte, RankDay, Damp) {
+	RandPredict <- function(CorpsCoefList, PredictDay, Nmonte, RankDay) {
 		library(MASS)
 		
 		#Get the basic information
@@ -230,11 +230,6 @@ Predictor <- function(CorpsList, PredictDay, Nmonte, RankDay, Damp=TRUE) {
 		GEcov = CorrMat * 40 * sqrt(4/3900)
 		CapCov = CorrMat * 30 * sqrt(4/3900)
 		
-		#To account for the fact that the caption-specific model is more certain of skill,
-		# 	we need to incrase random error to match the historical noise
-		#GEcov = GEcov * 1.25
-		#CapCov = CapCov * 1.25
-		
 		#Draw the random numbers using the covariance matrices, 
 		GErand = mvrnorm(Nmonte, mu=rep(0,Ncorps), Sigma=GEcov, empirical=F)
 		Mrand = mvrnorm(Nmonte, mu=rep(0,Ncorps), Sigma=CapCov, empirical=F)
@@ -263,6 +258,16 @@ Predictor <- function(CorpsList, PredictDay, Nmonte, RankDay, Damp=TRUE) {
 		Mscores = Mscores - max(Mscores)
 		RankScores = RankScores - max(RankScores)
 		
+		#Adjust the scores down of OC if we're late in the season
+		# OC coprs need to be discounted because the scores get inflated late in the season
+		if (RankDay >= 40 & PredictDay > 48) {
+			needOCadjust = names(CorpsCoefList) %in% OpenClass
+			GEscores[needOCadjust] = GEscores[needOCadjust] - (2 * 0.4)
+			Vscores[needOCadjust] = Vscores[needOCadjust] - (2 * 0.3)
+			Mscores[needOCadjust] = Mscores[needOCadjust] - (2 * 0.3)
+			RankScores[needOCadjust] = RankScores[needOCadjust] - 2
+		}
+		
 		#Get the rank vector
 		CorpsRanks = match(RankScores, sort(RankScores, decreasing=T)) #Ranks from highest to lowest
 		
@@ -286,7 +291,7 @@ Predictor <- function(CorpsList, PredictDay, Nmonte, RankDay, Damp=TRUE) {
 	
 	#Run both score predictors
 	ExpScoreList = ExpPredict(CorpsList, PredictDay, Nmonte)
-	RandScoreList = RandPredict(CorpsList, PredictDay, Nmonte, RankDay, Damp)
+	RandScoreList = RandPredict(CorpsList, PredictDay, Nmonte, RankDay)
 	#print(RandScoreList)
 	
 	#Now create the overall score and rank lists to return
@@ -297,7 +302,7 @@ Predictor <- function(CorpsList, PredictDay, Nmonte, RankDay, Damp=TRUE) {
 	for (C in 1:Ncorps) {
 		ScoreList[[C]] = 0.317*ExpScoreList[[C]] + 0.683*RandScoreList[[C]]
 	}
-	vars = sapply(ScoreList, var); print(mean(vars)); print(vars) #debugging
+	# vars = sapply(ScoreList, var); print(mean(vars)); print(vars) #debugging
 	
 	#Fill in RankList by sorting the scores
 	for (n in 1:Nmonte) {

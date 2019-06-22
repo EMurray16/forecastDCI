@@ -20,7 +20,7 @@ CleanExp = AllExponentials[!sapply(AllExponentials, is.null)]
 OpenExp = AllExponentials[OpenClass]
 
 #Predict World Class Finals, Day 52 and Open Class Finals (Day 48)
-tic(); Pred52 = Predictor(CleanExp, 52, 5000, 45, Damp=TRUE); toc()
+tic(); Pred52 = Predictor(CleanExp, 52, 5000, 45); toc()
 #tic(); Pred48 = Predictor(OpenExp, 48, 5000, MaxDay, Damp=FALSE); toc()
 
 
