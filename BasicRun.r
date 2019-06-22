@@ -12,18 +12,18 @@ ScoreTable = read.csv("DCI_Scores_2018.csv")
 MaxDay = max(ScoreTable$Day)
 
 #Now find the exponentials for all corps
-AllExponentials = lapply(ScoreList, ExpFitter, BaseDay=MaxDay)
+AllExponentials = lapply(ScoreList, ExpFitter, BaseDay=47)
 #Clean the exponential list
 CleanExp = AllExponentials[!sapply(AllExponentials, is.null)]
 
 #Separate the Open Class corps from World for predicting OC Finals
-OpenExp = AllExponentials[OpenClass]
+OpenExp = CleanExp[names(CleanExp) %in% OpenClass]
 
 #Predict World Class Finals, Day 52 and Open Class Finals (Day 48)
-tic(); Pred52 = Predictor(CleanExp, 52, 5000, 45); toc()
-#tic(); Pred48 = Predictor(OpenExp, 48, 5000, MaxDay, Damp=FALSE); toc()
+tic(); Pred52 = Predictor(CleanExp, 52, 5000, 20); toc()
+tic(); Pred48 = Predictor(OpenExp, 48, 5000, 47); toc()
 
 
 #Reduce each prediction to a readable data frame
 Frame52 = PredictionReduce_WorldClass(Pred52)
-#Frame48 = PredictionReduce_OpenClass(Pred48)
+Frame48 = PredictionReduce_OpenClass(Pred48)
