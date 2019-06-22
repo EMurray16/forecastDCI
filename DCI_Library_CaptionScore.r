@@ -49,21 +49,25 @@ ScoreParse <- function(filename, WorldNames=WorldClass, OpenNames=OpenClass) {
 }
 
 #Create a function that fits the exponential curve to a data frame
-ExpFitter <- function(CorpsFrame, BaseDay) {
+ExpFitter <- function(CorpsFrame, BaseDay, PrelimsDay=50) {
+	#50 is the prelims day for 2019, which is why it's defaulted here
+	
 	#Start by checking the number of shows
 	if (is.null(CorpsFrame)) { return(NULL) }
 	if (nrow(CorpsFrame) < 6) { return(NULL) }
 	
 	#The weight vector reduces weights of recent scores, based on their correlation with finals week scores
-	WeightVec = 0.65 + 3.6e-6 * (1:49)^2.86
-	WeightVec = c(WeightVec, 1,1,1)
+	#The weight vector reduces weights of recent scores, based on their correlation with finals week scores
+	DayVec = seq(from=0, to=PrelimsDay+2, by=1)
+	WeightVec = 1 - (PrelimsDay-DayVec)*0.00224
+	DiscountOrig = 0.25 + (0.75-0.25)/PrelimsDay * BaseDay
+	DiscountVec = seq(from=1, to=DiscountOrig, length.out=6)
 	
 	#Create a vector for the corps-specific day weights
-	BaseWeight = WeightVec[BaseDay]
-	#Create the linear increase in weights from BaseWeight to 1 over the 1.5-week window
-	Wline = seq(from=1, to=BaseWeight, length.out=10)
-	#All weights are 1 before the 1.5-week window
-	SpecWeights = c(rep(1,BaseDay-10), Wline)
+	ShowWeights = WeightVec[CorpsFrame$Day]
+	#Now discount the most recent 5
+	Nshow = length(ShowWeights)
+	ShowWeights[(Nshow-5):Nshow] = ShowWeights[(Nshow-5):Nshow] * DiscountVec
 	
 	#Pull out the individual vectors to match nls input better
 	N = sum(CorpsFrame$Day <= BaseDay)
@@ -76,11 +80,11 @@ ExpFitter <- function(CorpsFrame, BaseDay) {
 	#This tryCatch won't make the objects if we're not successful
 	tryCatch({ 
 		GEModel = nls(GE ~ a + Day^b, data=data.frame(GE, Day), start=list(a=GE[1], b=0.5), 
-			control=nls.control(warnOnly=TRUE), weights=SpecWeights[Day])
+			control=nls.control(warnOnly=TRUE), weights=ShowWeights)
 		VisModel = nls(Vis ~ a + Day^b, data=data.frame(Vis, Day), start=list(a=Vis[1], b=0.5), 
-			control=nls.control(warnOnly=TRUE), weights=SpecWeights[Day])
+			control=nls.control(warnOnly=TRUE), weights=ShowWeights)
 		MusModel = nls(Mus ~ a + Day^b, data=data.frame(Mus, Day), start=list(a=Mus[1], b=0.5), 
-			control=nls.control(warnOnly=TRUE), weights=SpecWeights[Day])
+			control=nls.control(warnOnly=TRUE), weights=ShowWeights)
 	}, warning = function(w) { #This makes it so scenarios of non-convergence don't return bad coefficients
 		#print("Can't run corps due to non-convergence")
 	}, error = function(e) {
@@ -94,7 +98,7 @@ ExpFitter <- function(CorpsFrame, BaseDay) {
 	CorpsFrame2 = CorpsFrame
 	TrimmedResult = NA #This tracks if we're successful in the if loop
 	
-	if (sum(ExistVec) < 3) { #This means we didn't get a good fit
+	if (sum(ExistVec) < 3) { #This means we didn't get a good fit in at least 1 caption
 		#print("Nonconvergence!")
 		#Try removing the most recent scores until we get convergence or too small a sample
 		CorpsFrame2 = CorpsFrame2[1:(nrow(CorpsFrame2)-1) ,]
@@ -121,9 +125,6 @@ ExpFitter <- function(CorpsFrame, BaseDay) {
 	#And now pull out the standard errors
 	aseVec = c(GEcoef[1,2], Vcoef[1,2], Mcoef[1,2])
 	bseVec = c(GEcoef[2,2], Vcoef[2,2], Mcoef[2,2])
-	
-	#In 2017, we imposed limits on the ceofficients so as not to produce impossible scores
-	#In this version, we do that later but not here, so that corps with impossible coefficients can still be ranked
 	
 	#Put the coefficients and standard errors into a data frame
 	OutFrame = data.frame(a=aVec, b=bVec, aSE=aseVec, bSE=bseVec, N=rep(N,3))
@@ -200,20 +201,39 @@ Predictor <- function(CorpsList, PredictDay, Nmonte, RankDay, Damp=TRUE) {
 				if (IndexDiff == 0) { 
 					#This is a diag
 					CorrMat[Row,Col] = 1
-				} else if (IndexDiff > 8) { 
+				} else if (IndexDiff > 14) { 
 					#This is a background correlation
-					CorrMat[Row,Col] = 0.1
+					CorrMat[Row,Col] = 0.263
 				} else { 
 					#This is an off-diag
-					CorrMat[Row,Col] = 0.77 - IndexDiff*0.07
+					CorrMat[Row,Col] = 0.513 - (IndexDiff-1)*(0.25/14)
 				}
 			}
 		}
+		#To account for the effect of doing caption specific correlations, we increase the correlation
+		CorrMat = CorrMat * 1.25
+		diag(CorrMat) = 1
 		
-		#Now multiply the correlation matrix by the standard deviations for each captions 
-		#The sqrt(1.2) is the historical noise magnitude in caption scores, GE is scaled to 40 points instead of 30
-		GEcov = CorrMat * sqrt(1.2*4/3)
-		CapCov = CorrMat * sqrt(1.2)
+		#Now multiply the correlation matrix by the variances for each captions 
+		#the historical noise magnitude is 4, so the captions are adjusted to add to that:
+			# 40^2 * GEvar + 30^2 * Mvar + 30^2 Vvar = 4
+			# 1600GEvar + 900Mvar + 900Vvar = 4
+			# Mvar = Vvar = Cvar - assuming the music and visual errors are the same
+			# 1600GEvar + 1800Cvar = 4
+			# GEvar = 4/3 * Cvar - assuming error is scaled by total caption score
+			# (4/3)1600Cvar + 1800Cvar = 4
+			# with some rounding...
+			# 3900Cvar = 4
+			# Cvar = 4 / 3900
+		# We now need to apply the variance to each individual caption 
+		# At some point the error needs to be scaled by total points, so we'll do it  here
+		GEcov = CorrMat * 40 * sqrt(4/3900)
+		CapCov = CorrMat * 30 * sqrt(4/3900)
+		
+		#To account for the fact that the caption-specific model is more certain of skill,
+		# 	we need to incrase random error to match the historical noise
+		#GEcov = GEcov * 1.25
+		#CapCov = CapCov * 1.25
 		
 		#Draw the random numbers using the covariance matrices, 
 		GErand = mvrnorm(Nmonte, mu=rep(0,Ncorps), Sigma=GEcov, empirical=F)
@@ -221,6 +241,10 @@ Predictor <- function(CorpsList, PredictDay, Nmonte, RankDay, Damp=TRUE) {
 		Vrand = mvrnorm(Nmonte, mu=rep(0,Ncorps), Sigma=CapCov, empirical=F)
 		
 		#We choose the column of random numbers for each corps based on their rank
+		# In 2018, we ranked by caption but now we use total score as it better indicates performance order
+		RankScores = vector(mode='double', length=Ncorps)
+		
+		#We still need the caption scores to do the predictions
 		GEscores = vector(mode='double', length=Ncorps)
 		Vscores = vector(mode='double', length=Ncorps)
 		Mscores = vector(mode='double', length=Ncorps)
@@ -230,37 +254,25 @@ Predictor <- function(CorpsList, PredictDay, Nmonte, RankDay, Damp=TRUE) {
 			GEscores[C] = CorpsCoefList[[C]]["GE","a"] + RankDay ^ CorpsCoefList[[C]]["GE","b"]
 			Vscores[C] = CorpsCoefList[[C]]["Vis","a"] + RankDay ^ CorpsCoefList[[C]]["Vis","b"]
 			Mscores[C] = CorpsCoefList[[C]]["Mus","a"] + RankDay ^ CorpsCoefList[[C]]["Mus","b"]
+			RankScores = GEscores + Vscores + Mscores
 		}
+		
 		#Convert these to gaps
 		GEscores = GEscores - max(GEscores) 
 		Vscores = Vscores - max(Vscores)
 		Mscores = Mscores - max(Mscores)
+		RankScores = RankScores - max(RankScores)
 		
-		#Get vectors of rank for each caption
-		GEranks = match(GEscores, sort(GEscores, decreasing=T)) #Ranks from highest to lowest
-		Vranks = match(Vscores, sort(Vscores, decreasing=T)) #Ranks from highest to lowest
-		Mranks = match(Mscores, sort(Mscores, decreasing=T)) #Ranks from highest to lowest
+		#Get the rank vector
+		CorpsRanks = match(RankScores, sort(RankScores, decreasing=T)) #Ranks from highest to lowest
 		
 		#Now loop through each corps and fill in ScoreList
 		for (C in 1:Ncorps) {
-			#Damp the noise for top 15 if the PredictDay is >38 and Damp is true
-			if (Damp & PredictDay > 38) {
-				#Adjust the uncertainty for slotting in the top 12 later in the season by reducing the magnitude of the noise
-				if (GEranks[C] < 15) {
-					GErand[,GEranks[C]] = GErand[,GEranks[C]] * (1 - 0.03*(15-GEranks[C])) * (RankDay-38)/14
-				}
-				if (Vranks[C] < 15) {
-					Vrand[,Vranks[C]] = Vrand[,Vranks[C]] * (1 - 0.03*(15-GEranks[C])) * (RankDay-38)/14
-				}
-				if (Mranks[C] < 15) {
-					Mrand[,Mranks[C]] = Mrand[,Mranks[C]] * (1 - 0.03*(15-Mranks[C])) * (RankDay-38)/14
-				}
-			}
-			
-			#Get the scores for each caption
-			GEvec = GEscores[C] + GErand[,GEranks[C]]
-			Mvec = Mscores[C] + Mrand[,Mranks[C]]
-			Vvec = Vscores[C] + Vrand[,Vranks[C]]
+			# In 2018 we had a damping effect to account for slotting, but that effect is now captured
+			# 	by other parts in the model.
+			GEvec = GEscores[C] + GErand[,CorpsRanks[C]]
+			Mvec = Mscores[C] + Mrand[,CorpsRanks[C]]
+			Vvec = Vscores[C] + Vrand[,CorpsRanks[C]]
 			
 			#Put the summed scores into the list
 			ScoreList[[C]] = GEvec + Mvec + Vvec
@@ -283,10 +295,9 @@ Predictor <- function(CorpsList, PredictDay, Nmonte, RankDay, Damp=TRUE) {
 	
 	#Fill in the final ScoreList
 	for (C in 1:Ncorps) {
-		ScoreList[[C]] = 0.275*ExpScoreList[[C]] + 0.725*RandScoreList[[C]]
-		#ScoreList[[C]] = RandScoreList[[C]]
+		ScoreList[[C]] = 0.317*ExpScoreList[[C]] + 0.683*RandScoreList[[C]]
 	}
-	print(ScoreList)
+	vars = sapply(ScoreList, var); print(mean(vars)); print(vars) #debugging
 	
 	#Fill in RankList by sorting the scores
 	for (n in 1:Nmonte) {
