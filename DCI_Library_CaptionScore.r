@@ -5,19 +5,19 @@ WorldClass = c("The Academy","Blue Devils","Blue Knights","Blue Stars","Bluecoat
 	"The Cavaliers","Colts","Crossmen","Genesis","Jersey Surf","Madison Scouts","Mandarins","Music City","Oregon Crusaders",
 	"Pacific Crest","Phantom Regiment","Pioneer","Santa Clara Vanguard","Seattle Cascades","Spirit of Atlanta","Troopers"
 )
-#Eventually this will only include 
-OpenClass = c("7th Regiment","The Battalion","Blue Devils B","Blue Devils C","Colt Cadets","Columbians","Gold","Golden Empire",
+OpenClass = c("7th Regiment","The Battalion","Blue Devils B","Blue Devils C","Colt Cadets","Columbians","Encorps","Gold","Golden Empire",
 	"Guardians","Heat Wave","Impulse","Incognito","Legends","Louisiana Stars","Raiders","River City Rhythm","Shadow",
 	"Southwind","Spartans","Vanguard Cadets","Vessel","Watchmen"
+)
+OC_NotAttending = c("The Battalion","Blue Devils B","Blue Devils C","Columbians","Encorps","Impulse","Incognito",
+	"Vanguard Cadets","Vessel","Watchmen"
 )
 
 
 ScoreParse <- function(filename, WorldNames=WorldClass, OpenNames=OpenClass) {
 	#Start by loading the file
 	BigTable = read.csv(filename, stringsAsFactors=F)
-	
-	#Eventually, we'll get rid of Open Class names that aren't going to Finals Week
-	
+		
 	#This function creates a data frame for a given corps
 	FrameCreate <- function(CorpsName, Table) {
 		#Start by finding all the rows which have data
@@ -55,6 +55,9 @@ ExpFitter <- function(CorpsFrame, BaseDay, PrelimsDay=50) {
 	#Start by checking the number of shows
 	if (is.null(CorpsFrame)) { return(NULL) }
 	if (nrow(CorpsFrame) < 6) { return(NULL) }
+	
+	#Order the frame by day
+	CorpsFrame = CorpsFrame[order(CorpsFrame$Day),]
 	
 	#The weight vector reduces weights of recent scores, based on their correlation with finals week scores
 	#The weight vector reduces weights of recent scores, based on their correlation with finals week scores
