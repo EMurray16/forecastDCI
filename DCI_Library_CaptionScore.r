@@ -2,11 +2,11 @@
 
 #Hardcode the corps names by class as generally accessible variables
 WorldClass = c("The Academy","Blue Devils","Blue Knights","Blue Stars","Bluecoats","Boston Crusaders","The Cadets","Carolina Crown",
-	"The Cavaliers","Colts","Crossmen","Genesis","Jersey Surf","Madison Scouts","Mandarins","Music City","Oregon Crusaders",
-	"Pacific Crest","Phantom Regiment","Pioneer","Santa Clara Vanguard","Seattle Cascades","Spirit of Atlanta","Troopers"
+	"The Cavaliers","Colts","Crossmen","Genesis","Jersey Surf","Madison Scouts","Mandarins","Music City",
+	"Pacific Crest","Phantom Regiment","Santa Clara Vanguard","Seattle Cascades","Spirit of Atlanta","Troopers"
 )
 OpenClass = c("7th Regiment","The Battalion","Blue Devils B","Blue Devils C","Colt Cadets","Columbians","Encorps","Gold","Golden Empire",
-	"Guardians","Heat Wave","Impulse","Incognito","Legends","Louisiana Stars","Raiders","River City Rhythm","Shadow",
+	"Guardians","Heat Wave","Impulse","Incognito","Legends","Les Stentors","Louisiana Stars","Raiders","River City Rhythm","Shadow",
 	"Southwind","Spartans","Vanguard Cadets","Vessel","Watchmen"
 )
 OC_NotAttending = c("The Battalion","Blue Devils B","Blue Devils C","Columbians","Encorps","Impulse","Incognito",
@@ -17,7 +17,10 @@ OC_NotAttending = c("The Battalion","Blue Devils B","Blue Devils C","Columbians"
 ScoreParse <- function(filename, WorldNames=WorldClass, OpenNames=OpenClass) {
 	#Start by loading the file
 	BigTable = read.csv(filename, stringsAsFactors=F)
-		
+	
+	# Eliminate any rows with null scores
+	BigTable = BigTable[!is.na(BigTable$GE) & !is.na(BigTable$Visual) & !is.na(BigTable$Music) ,]
+	
 	#This function creates a data frame for a given corps
 	FrameCreate <- function(CorpsName, Table) {
 		#Start by finding all the rows which have data
@@ -31,9 +34,10 @@ ScoreParse <- function(filename, WorldNames=WorldClass, OpenNames=OpenClass) {
 		VisVec = Table[CorpsRows,"Visual"]
 		MusVec = Table[CorpsRows,"Music"]
 		DayVec = Table[CorpsRows,"Day"]
+		SourceVec = Table[CorpsRows,"Source"]
 		
 		#Now make the data frame
-		OutFrame = data.frame(Day=DayVec, GE=GEvec, Vis=VisVec, Mus=MusVec)
+		OutFrame = data.table(Day=DayVec, GE=GEvec, Vis=VisVec, Mus=MusVec, Source=SourceVec)		
 		return(OutFrame)
 	}
 	
@@ -42,9 +46,11 @@ ScoreParse <- function(filename, WorldNames=WorldClass, OpenNames=OpenClass) {
 	OpenFrames = lapply(OpenNames, FrameCreate, Table=BigTable)
 	#Combine them into a single frame
 	AllFrames = c(WorldFrames, OpenFrames)
+	# AllFrames = c(WorldFrames)
 	
 	#Add the corps names to the frames
 	names(AllFrames) = c(WorldNames, OpenNames)
+	# names(AllFrames) = c(WorldNames)
 	return(AllFrames)
 }
 
@@ -60,7 +66,6 @@ ExpFitter <- function(CorpsFrame, BaseDay, PrelimsDay=50) {
 	CorpsFrame = CorpsFrame[order(CorpsFrame$Day),]
 	
 	#The weight vector reduces weights of recent scores, based on their correlation with finals week scores
-	#The weight vector reduces weights of recent scores, based on their correlation with finals week scores
 	DayVec = seq(from=0, to=PrelimsDay+2, by=1)
 	WeightVec = 1 - (PrelimsDay-DayVec)*0.00224
 	DiscountOrig = 0.25 + (0.75-0.25)/PrelimsDay * BaseDay
@@ -71,6 +76,9 @@ ExpFitter <- function(CorpsFrame, BaseDay, PrelimsDay=50) {
 	#Now discount the most recent 5
 	Nshow = length(ShowWeights)
 	ShowWeights[(Nshow-5):Nshow] = ShowWeights[(Nshow-5):Nshow] * DiscountVec
+	
+	# print("ExpFitter:")
+	# print(data.table(Day=CorpsFrame$Day, WeightsOld=ShowWeights))
 	
 	#Pull out the individual vectors to match nls input better
 	N = sum(CorpsFrame$Day <= BaseDay)
@@ -107,10 +115,116 @@ ExpFitter <- function(CorpsFrame, BaseDay, PrelimsDay=50) {
 		CorpsFrame2 = CorpsFrame2[1:(nrow(CorpsFrame2)-1) ,]
 		
 		if (nrow(CorpsFrame) < 6) { #Check for sample size
+			print("NONCONVERGENCE")
 			break
 		} else {
 			#Recursion!
 			TrimmedResult = ExpFitter(CorpsFrame2, BaseDay)
+			#No matter what, we can return TrimmedResult because this is the top level of the recursion
+			return(TrimmedResult)
+		}
+	}
+	
+	#Pull out the summary of the models
+	GEcoef = summary(GEModel)$coefficients
+	Vcoef = summary(VisModel)$coefficients
+	Mcoef = summary(MusModel)$coefficients
+	
+	#Now pull out the coefficients
+	aVec = c(GEcoef[1,1], Vcoef[1,1], Mcoef[1,1])
+	bVec = c(GEcoef[2,1], Vcoef[2,1], Mcoef[2,1])
+	
+	#And now pull out the standard errors
+	aseVec = c(GEcoef[1,2], Vcoef[1,2], Mcoef[1,2])
+	bseVec = c(GEcoef[2,2], Vcoef[2,2], Mcoef[2,2])
+	
+	#Put the coefficients and standard errors into a data frame
+	OutFrame = data.frame(a=aVec, b=bVec, aSE=aseVec, bSE=bseVec, N=rep(N,3))
+	row.names(OutFrame) = c('GE','Vis','Mus')
+	#return the data frame
+	return(OutFrame)
+}
+
+#Create a function that fits the exponential curve to a data frame
+# This one always includes all scores, but doubles the weight for those before the base day
+ExpFitterMod <- function(CorpsFrame, BaseDay, PrelimsDay=50) {
+	#50 is the prelims day for 2019, which is why it's defaulted here
+	
+	#Start by checking the number of shows
+	if (is.null(CorpsFrame)) { return(NULL) }
+	if (nrow(CorpsFrame) < 6) { return(NULL) }
+	
+	#Order the frame by day
+	CorpsFrame = CorpsFrame[order(CorpsFrame$Day),]
+	
+	#The weight vector reduces weights of recent scores, based on their correlation with finals week scores
+	DayVec = seq(from=0, to=PrelimsDay+2, by=1)
+	WeightVec = 1 - (PrelimsDay-DayVec)*0.00224
+	DiscountOrig = 0.25 + (0.75-0.25)/PrelimsDay * BaseDay
+	DiscountVec = seq(from=1, to=DiscountOrig, length.out=6)
+	
+	#Create a vector for the corps-specific day weights
+	ShowWeights = WeightVec[CorpsFrame$Day]
+	#Now discount the most recent 5
+	Nshow = sum(CorpsFrame$Day <= BaseDay)
+	# We can't assume there are 5 shows to weight, so we have to loop backwards from the show
+	if (Nshow > 0) {
+		discountInd = 7
+		for (ind in Nshow:(max(1,Nshow-5))) {
+			discountInd = discountInd - 1
+			#print(c(Nshow, ind, discountInd))
+			ShowWeights[ind] = ShowWeights[ind] * DiscountVec[discountInd]
+		}
+	}
+	
+	# Double the weights for simulated days
+	ShowWeights[CorpsFrame$Source == "sim"] = ShowWeights[CorpsFrame$Source == "sim"]*5
+	
+	# print("ExpFitterMod:")
+	# print(data.table(Day=CorpsFrame$Day, WeightsOld=ShowWeights, WeightsNew = ShowWeights2))
+	
+	#Pull out the individual vectors to match nls input better
+	N = sum(CorpsFrame$Day < PrelimsDay)
+	GE = CorpsFrame$GE#[CorpsFrame$Day < PrelimsDay]
+	Vis = CorpsFrame$Vis#[CorpsFrame$Day < PrelimsDay]
+	Mus = CorpsFrame$Mus#[CorpsFrame$Day < PrelimsDay]
+	Day = CorpsFrame$Day#[CorpsFrame$Day < PrelimsDay]
+	
+	#Now fit the curve for each caption, wrapped in a try to avoid catastrophic errors
+	#This tryCatch won't make the objects if we're not successful
+	tryCatch({ 
+		GEModel = nls(GE ~ a + Day^b, data=data.frame(GE, Day), start=list(a=GE[1], b=0.5), 
+			control=nls.control(warnOnly=TRUE), weights=ShowWeights)
+		VisModel = nls(Vis ~ a + Day^b, data=data.frame(Vis, Day), start=list(a=Vis[1], b=0.5), 
+			control=nls.control(warnOnly=TRUE), weights=ShowWeights)
+		MusModel = nls(Mus ~ a + Day^b, data=data.frame(Mus, Day), start=list(a=Mus[1], b=0.5), 
+			control=nls.control(warnOnly=TRUE), weights=ShowWeights)
+	}, warning = function(w) { #This makes it so scenarios of non-convergence don't return bad coefficients
+		print("Can't run corps due to non-convergence")
+	}, error = function(e) {
+		print("Can't run corps due to an error in curve fitting")
+		print(e)
+		print(c(length(ShowWeights), length(Day), length(GE), ))
+	}) 
+	
+	#Check to see how many of the 3 models exist
+	ExistVec = c(exists('GEModel'), exists('VisModel'), exists('MusModel'))
+	
+	#Create a copy of CorpsFrame we can modify
+	CorpsFrame2 = CorpsFrame
+	TrimmedResult = NA #This tracks if we're successful in the if loop
+	
+	if (sum(ExistVec) < 3) { #This means we didn't get a good fit in at least 1 caption
+		#print("Nonconvergence!")
+		#Try removing the most recent scores until we get convergence or too small a sample
+		CorpsFrame2 = CorpsFrame2[1:(nrow(CorpsFrame2)-1) ,]
+		
+		if (nrow(CorpsFrame) < 6) { #Check for sample size
+			print("NONCONVERGENCE")
+			break
+		} else {
+			#Recursion!
+			TrimmedResult = ExpFitterMod(CorpsFrame2, BaseDay)
 			#No matter what, we can return TrimmedResult because this is the top level of the recursion
 			return(TrimmedResult)
 		}
@@ -171,18 +285,9 @@ Predictor <- function(CorpsList, PredictDay, Nmonte, RankDay) {
 			Mscore[Mscore > 30] = 30
 			
 			#Now get the total score list
-			ScoreList[[C]] = GEscore + Vscore + Mscore
+			ScoreList[[C]] = data.table(GE=GEscore, Vis=Vscore, Mus=Mscore)
 		}
 		
-		#Convert each simulation score to gaps
-		BaseScores = vector(mode='double', length=Nmonte)
-		for (i in 1:Nmonte) {
-			BaseScores[i] = max(sapply(ScoreList, '[[', i))
-		}
-		#Now loop through each corps and subtract the base score
-		for (C in 1:length(ScoreList)) {
-			ScoreList[[C]] = ScoreList[[C]] - BaseScores
-		}		
 		return(ScoreList)
 	}
 	
@@ -255,22 +360,6 @@ Predictor <- function(CorpsList, PredictDay, Nmonte, RankDay) {
 			RankScores = GEscores + Vscores + Mscores
 		}
 		
-		#Convert these to gaps
-		GEscores = GEscores - max(GEscores) 
-		Vscores = Vscores - max(Vscores)
-		Mscores = Mscores - max(Mscores)
-		RankScores = RankScores - max(RankScores)
-		
-		#Adjust the scores down of OC if we're late in the season
-		# OC coprs need to be discounted because the scores get inflated late in the season
-		if (RankDay >= 40 & PredictDay > 48) {
-			needOCadjust = names(CorpsCoefList) %in% OpenClass
-			GEscores[needOCadjust] = GEscores[needOCadjust] - (2 * 0.4)
-			Vscores[needOCadjust] = Vscores[needOCadjust] - (2 * 0.3)
-			Mscores[needOCadjust] = Mscores[needOCadjust] - (2 * 0.3)
-			RankScores[needOCadjust] = RankScores[needOCadjust] - 2
-		}
-		
 		#Get the rank vector
 		CorpsRanks = match(RankScores, sort(RankScores, decreasing=T)) #Ranks from highest to lowest
 		
@@ -283,9 +372,8 @@ Predictor <- function(CorpsList, PredictDay, Nmonte, RankDay) {
 			Vvec = Vscores[C] + Vrand[,CorpsRanks[C]]
 			
 			#Put the summed scores into the list
-			ScoreList[[C]] = GEvec + Mvec + Vvec
+			ScoreList[[C]] = data.table(GE=GEvec, Vis=Vvec, Mus=Mvec)
 		}
-		
 		return(ScoreList)
 	}
 	
@@ -305,25 +393,15 @@ Predictor <- function(CorpsList, PredictDay, Nmonte, RankDay) {
 	for (C in 1:Ncorps) {
 		ScoreList[[C]] = 0.317*ExpScoreList[[C]] + 0.683*RandScoreList[[C]]
 	}
-	# vars = sapply(ScoreList, var); print(mean(vars)); print(vars) #debugging
 	
-	#Fill in RankList by sorting the scores
-	for (n in 1:Nmonte) {
-		#Get the scores and rank them
-		scores = sapply(ScoreList, '[[', n)
-		ranks = match(scores, sort(scores, decreasing=T))
-		#Now put the ranks into the list
-		for (C in 1:Ncorps) {
-			RankList[[C]][n] = ranks[C]
-		}
-	}
+	# Round everything to the 3rd digit
+	
 	
 	#Retain the names in the lists
 	names(ScoreList) = names(CorpsList)
-	names(RankList) = names(CorpsList)
 	
 	#return the lists
-	return(list(ScoreList, RankList))
+	return(ScoreList)
 }
 
 #this function returns a vector of information for each corps 
