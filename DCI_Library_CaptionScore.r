@@ -1,5 +1,5 @@
 #This contains all of the functions used in the model
-
+library(data.table)
 #Hardcode the corps names by class as generally accessible variables
 WorldClass = c("The Academy","Blue Devils","Blue Knights","Blue Stars","Bluecoats","Boston Crusaders","The Cadets","Carolina Crown",
 	"The Cavaliers","Colts","Crossmen","Genesis","Jersey Surf","Madison Scouts","Mandarins","Music City",
@@ -16,7 +16,7 @@ OC_NotAttending = c("The Battalion","Blue Devils B","Blue Devils C","Columbians"
 
 ScoreParse <- function(filename, WorldNames=WorldClass, OpenNames=OpenClass) {
 	#Start by loading the file
-	BigTable = read.csv(filename, stringsAsFactors=F)
+	BigTable = data.table(read.csv(filename, stringsAsFactors=F))
 	
 	# Eliminate any rows with null scores
 	BigTable = BigTable[!is.na(BigTable$GE) & !is.na(BigTable$Visual) & !is.na(BigTable$Music) ,]
@@ -30,15 +30,18 @@ ScoreParse <- function(filename, WorldNames=WorldClass, OpenNames=OpenClass) {
 		}
 		
 		#Get vectors for the scores and Day
-		GEvec = Table[CorpsRows,"GE"]
-		VisVec = Table[CorpsRows,"Visual"]
-		MusVec = Table[CorpsRows,"Music"]
-		DayVec = Table[CorpsRows,"Day"]
-		SourceVec = Table[CorpsRows,"Source"]
+		GEvec = Table$GE[CorpsRows]
+		VisVec = Table$Visual[CorpsRows]
+		MusVec = Table$Music[CorpsRows]
+		DayVec = Table$Day[CorpsRows]
+		SourceVec = Table$Source[CorpsRows]
 		
 		#Now make the data frame
-		OutFrame = data.table(Day=DayVec, GE=GEvec, Vis=VisVec, Mus=MusVec, Source=SourceVec)		
+		OutFrame = data.table(Day=DayVec, GE=GEvec, Vis=VisVec, Mus=MusVec, Source=SourceVec)
+		# Before returning the frame, we want to sort by day
+		OutFrame = OutFrame[order(OutFrame$Day),]
 		return(OutFrame)
+		#print(OutFrame)
 	}
 	
 	#Now run the function on all the world class and open class corps
